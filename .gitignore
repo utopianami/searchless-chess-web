@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+checkpoints/9M/
+searchless_chess/checkpoints/9M/
+.omc/

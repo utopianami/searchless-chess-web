@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Chess AI</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div id="app">
+  <!-- Mode + Color -->
+  <div id="top-bar">
+    <div id="mode-bar">
+      <button class="mode-btn active" data-mode="ai">AI 대국</button>
+      <button class="mode-btn" data-mode="review">복기</button>
+    </div>
+    <div id="color-bar">
+      <button class="color-btn active" data-color="w">백</button>
+      <button class="color-btn" data-color="b">흑</button>
+    </div>
+  </div>
+
+  <!-- Captured + Eval Bar -->
+  <div id="eval-section">
+    <div id="captured-row">
+      <div id="white-captured" class="captured-side">
+        <span class="captured-adv" id="white-adv"></span>
+        <span class="captured-pieces" id="white-pieces"></span>
+      </div>
+      <div id="black-captured" class="captured-side right">
+        <span class="captured-pieces" id="black-pieces"></span>
+        <span class="captured-adv" id="black-adv"></span>
+      </div>
+    </div>
+    <div id="eval-bar">
+      <div id="eval-white"><span id="eval-white-pct">50%</span></div>
+      <div id="eval-black"><span id="eval-black-pct">50%</span></div>
+    </div>
+  </div>
+
+  <!-- Turn Indicator -->
+  <div id="turn-indicator">
+    <span id="turn-dot"></span>
+    <span id="turn-text">백 차례</span>
+    <span id="status"></span>
+  </div>
+
+  <!-- Board -->
+  <div id="board-wrap">
+    <canvas id="board-canvas"></canvas>
+  </div>
+
+  <!-- Nav -->
+  <div id="nav-bar">
+    <button id="btn-first" class="nav-btn">&laquo;</button>
+    <button id="btn-prev" class="nav-btn">&lsaquo;</button>
+    <span id="move-counter">0 / 0</span>
+    <button id="btn-next" class="nav-btn">&rsaquo;</button>
+    <button id="btn-last" class="nav-btn">&raquo;</button>
+  </div>
+
+  <!-- Candidate Moves -->
+  <div id="cand-panel">
+    <div id="cand-header">다음 수</div>
+    <div id="cand-list"></div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
