@@ -1,0 +1,11 @@
+# GPU serving environment (Python 3.13, NVIDIA driver supporting CUDA 13).
+jax[cuda13]==0.11.1
+dm-haiku==0.0.17
+flax==0.12.9
+orbax-checkpoint==0.12.4
+apache-beam==2.76.0
+grain==0.2.18
+jaxtyping==0.3.11
+chess==1.11.2
+fastapi==0.141.1
+uvicorn==0.52.4

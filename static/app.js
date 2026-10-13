@@ -33,6 +33,18 @@ let gameOver = false;
 let boardFlipped = false;
 let candidateIdx = -1;
 let candidateLocked = false;
+let selectedModel = '270M';
+let modelCatalog = [];
+let positionVersion = 0;
+let analysisVersion = 0;
+let moveVersion = 0;
+let apiError = '';
+let analysisPending = false;
+let scoreType = 'win_probability';
+let lastActivity = Date.now();
+let activitySent = 0;
+let manuallyReleased = false;
+let gpuBusy = false;
 
 // ── Image Loading ──
 const pieceImages = {};
@@ -59,6 +71,8 @@ const boardCanvas = document.getElementById('board-canvas');
 const ctx = boardCanvas.getContext('2d');
 
 function initGame() {
+  positionVersion++;
+  moveVersion++;
   history = [{ fen: INITIAL_FEN, lastMove: null }];
   historyIdx = 0;
   // Ensure canvas is sized before drawing
@@ -80,6 +94,7 @@ function initGame() {
   whiteWinProb = 0.5;
   isThinking = false;
   gameOver = false;
+  apiError = '';
   candidateIdx = -1;
   boardFlipped = (mode === 'ai') ? playerColor === 'b' : false;
   drawBoard();
@@ -87,7 +102,7 @@ function initGame() {
   renderCandidates();
   fetchAnalysis();
   if (mode === 'ai' && playerColor === 'b') {
-    setTimeout(() => requestAIMove(), 200);
+    requestAIMove();
   }
 }
 
@@ -188,10 +203,12 @@ function fileRankToSquare(file, rank) {
 }
 
 function resizeCanvas() {
+  if (!history.length) return;
   const wrap = document.getElementById('board-wrap');
   const size = wrap.clientWidth || Math.min(window.innerWidth - 12, 500);
-  wrap.style.height = size + 'px';
   const dpr = window.devicePixelRatio || 1;
+  if (boardCanvas._logicalSize === size && boardCanvas.width === size * dpr) return;
+  wrap.style.height = size + 'px';
   boardCanvas.width = size * dpr;
   boardCanvas.height = size * dpr;
   boardCanvas.style.width = size + 'px';
@@ -317,9 +334,19 @@ function drawBoard() {
 function renderCandidates() {
   const list = document.getElementById('cand-list');
   if (!moveProbs.length) {
-    list.innerHTML = '<div style="padding:10px;color:#7c7a76;text-align:center;font-size:12px;">분석 중...</div>';
+    const message = gameOver ? '게임 종료' : manuallyReleased ? 'GPU 해제됨. 재시도로 분석을 다시 시작할 수 있습니다.' : apiError ? '분석을 불러오지 못했습니다. 재시도를 눌러주세요.' : '';
+    list.setAttribute('aria-busy', String(!message));
+    if (message) {
+      const empty = document.createElement('div');
+      empty.className = 'cand-empty';
+      empty.textContent = message;
+      list.replaceChildren(empty);
+    } else {
+      list.innerHTML = '<div class="cand-placeholder" aria-hidden="true"><span></span><span></span><span></span></div>'.repeat(10);
+    }
     return;
   }
+  list.setAttribute('aria-busy', 'false');
   const isWhiteTurn = currentTurn() === 'w';
   list.innerHTML = moveProbs.map((m, i) => {
     const pct = (m.prob * 100).toFixed(1);
@@ -359,6 +386,8 @@ function renderCandidates() {
 
 // ── UI ──
 function updateUI() {
+  document.getElementById('eval-bar').hidden = whiteWinProb === null;
+  document.getElementById('cand-header').textContent = scoreType === 'move_probability' ? '다음 수 · 수 선택 확률' : '다음 수 · 예상 승률';
   const wp = Math.round(whiteWinProb * 100);
   const bp = 100 - wp;
   document.getElementById('eval-white').style.flex = Math.max(wp, 3);
@@ -377,19 +406,45 @@ function updateUI() {
   else if (isThinking) statusEl.textContent = 'AI 생각 중...';
   else statusEl.textContent = '';
 
+  const modelStatus = document.getElementById('model-status');
+  modelStatus.className = apiError ? 'error' : '';
+  modelStatus.textContent = apiError || (manuallyReleased ? 'GPU를 해제했습니다. 다음 분석에서 자동으로 다시 준비합니다.' : analysisPending || isThinking
+    ? '모델 분석 중... 처음 선택한 모델은 준비에 시간이 걸릴 수 있습니다.'
+    : scoreType === 'move_probability'
+      ? '선택 확률을 표시합니다. 이 모델은 승률을 예측하지 않습니다.'
+      : '선택한 모델로 대국과 형세를 분석합니다.');
+  document.getElementById('btn-retry').hidden = !apiError && !manuallyReleased;
+
   renderCaptured();
 }
 
 // ── API ──
 async function fetchAnalysis() {
   if (gameOver) return;
+  manuallyReleased = false;
+  const version = ++analysisVersion;
+  const position = positionVersion;
+  const fen = currentFEN();
+  const model = selectedModel;
+  analysisPending = true;
+  apiError = '';
+  allMoveProbs = [];
+  moveProbs = [];
+  updateUI();
+  renderCandidates();
   try {
     const res = await fetch('/api/analyse', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fen: currentFEN() }),
+      body: JSON.stringify({ fen, model }),
     });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}));
+      throw new Error(typeof error.detail === 'string' ? error.detail : `분석 요청 실패 (${res.status}). 재시도해 주세요.`);
+    }
     const data = await res.json();
+    if (version !== analysisVersion || position !== positionVersion || model !== selectedModel || fen !== currentFEN()) return;
+    scoreType = data.score_type;
     if (data.game_over) {
       gameOver = true;
       whiteWinProb = data.white_win_prob;
@@ -404,29 +459,51 @@ async function fetchAnalysis() {
     candidateLocked = false;
     updateUI();
     renderCandidates();
-  } catch (e) { console.error('Analysis error:', e); }
+  } catch (e) {
+    if (version === analysisVersion && position === positionVersion) apiError = e.message;
+  } finally {
+    if (version === analysisVersion) {
+      analysisPending = false;
+      updateUI();
+      renderCandidates();
+      refreshGPU();
+    }
+  }
 }
 
 async function requestAIMove() {
-  if (gameOver || isThinking) return;
+  if (gameOver || isThinking || mode !== 'ai' || currentTurn() === playerColor || !isAtLatest()) return;
+  const version = ++moveVersion;
+  const position = positionVersion;
+  const fen = currentFEN();
+  const model = selectedModel;
   isThinking = true;
+  apiError = '';
   updateUI();
   try {
     const res = await fetch('/api/move', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fen: currentFEN() }),
+      body: JSON.stringify({ fen, model }),
     });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}));
+      throw new Error(typeof error.detail === 'string' ? error.detail : `AI 요청 실패 (${res.status}). 재시도해 주세요.`);
+    }
     const data = await res.json();
+    if (version !== moveVersion || position !== positionVersion || model !== selectedModel || fen !== currentFEN()) return;
     if (data.error) gameOver = true;
     else applyMove(data.uci, { from: data.from, to: data.to });
-  } catch (e) { console.error('AI move error:', e); }
-  isThinking = false;
-  updateUI();
+  } catch (e) {
+    if (version === moveVersion && position === positionVersion) apiError = e.message;
+  } finally {
+    if (version === moveVersion) { isThinking = false; updateUI(); }
+  }
 }
 
 // ── Move ──
 function applyMove(uci, moveInfo) {
+  positionVersion++;
   if (!isAtLatest()) history = history.slice(0, historyIdx + 1);
   const newFen = applyMoveToFEN(currentFEN(), uci);
   history.push({ fen: newFen, lastMove: moveInfo });
@@ -454,6 +531,7 @@ function applyMoveToFEN(fen, uci) {
   const tf = uci.charCodeAt(2) - 97, tr = 7 - (parseInt(uci[3]) - 1);
   const promo = uci.length === 5 ? uci[4] : null;
   const piece = board[fr][ff];
+  const capturedPiece = board[tr][tf];
   board[fr][ff] = null;
   if (piece && piece.toLowerCase() === 'p' && ff !== tf && board[tr][tf] === null) board[fr][tf] = null;
   if (piece && piece.toLowerCase() === 'k' && Math.abs(ff - tf) === 2) {
@@ -480,11 +558,15 @@ function applyMoveToFEN(fen, uci) {
   if (piece === 'R' && ff === 0 && fr === 7) cas = cas.replace('Q', '');
   if (piece === 'r' && ff === 7 && fr === 0) cas = cas.replace('k', '');
   if (piece === 'r' && ff === 0 && fr === 0) cas = cas.replace('q', '');
+  if (capturedPiece === 'R' && tf === 7 && tr === 7) cas = cas.replace('K', '');
+  if (capturedPiece === 'R' && tf === 0 && tr === 7) cas = cas.replace('Q', '');
+  if (capturedPiece === 'r' && tf === 7 && tr === 0) cas = cas.replace('k', '');
+  if (capturedPiece === 'r' && tf === 0 && tr === 0) cas = cas.replace('q', '');
   if (!cas) cas = '-';
   let ep = '-';
   if (piece && piece.toLowerCase() === 'p' && Math.abs(fr - tr) === 2)
     ep = String.fromCharCode(97 + ff) + (8 - (fr + tr) / 2);
-  const half = (piece && piece.toLowerCase() === 'p' || fen.split(' ')[0] !== fenBoard) ? 0 : parseInt(parts[4]) + 1;
+  const half = (piece && piece.toLowerCase() === 'p' || capturedPiece) ? 0 : parseInt(parts[4]) + 1;
   const full = parts[1] === 'b' ? parseInt(parts[5]) + 1 : parts[5];
   return `${fenBoard} ${newTurn} ${cas} ${ep} ${half} ${full}`;
 }
@@ -520,7 +602,7 @@ function handleBoardClick(e) {
       let uci = selectedSquare + sqName;
       if (mp && mp.toLowerCase() === 'p' && (rank === 7 || rank === 0)) uci += 'q';
       applyMove(uci, { from: selectedSquare, to: sqName });
-      if (mode === 'ai' && !gameOver) setTimeout(() => requestAIMove(), 100);
+      if (mode === 'ai' && !gameOver) requestAIMove();
     } else { selectedSquare = null; drawBoard(); }
   }
 }
@@ -528,6 +610,10 @@ function handleBoardClick(e) {
 // ── Navigation ──
 function goTo(idx) {
   if (idx < 0 || idx >= history.length) return;
+  positionVersion++;
+  moveVersion++;
+  isThinking = false;
+  gameOver = false;
   historyIdx = idx;
   selectedSquare = null;
   candidateIdx = -1;
@@ -535,6 +621,7 @@ function goTo(idx) {
   drawBoard();
   updateUI();
   fetchAnalysis();
+  requestAIMove();
 }
 
 document.getElementById('btn-first').addEventListener('click', () => goTo(0));
@@ -585,11 +672,110 @@ boardCanvas.addEventListener('touchend', (e) => {
 });
 
 // ── Init ──
-function startApp() {
-  window.addEventListener('resize', resizeCanvas);
-  initGame();
-  loadImages(() => { drawBoard(); });
+async function loadModels() {
+  const res = await fetch('/api/models');
+  if (!res.ok) throw new Error('모델 목록을 불러오지 못했습니다. 재시도해 주세요.');
+  const data = await res.json();
+  modelCatalog = data.models;
+  let stored;
+  try { stored = localStorage.getItem('chess-model'); } catch (_) {}
+  selectedModel = modelCatalog.some(m => m.id === stored && m.available) ? stored : data.default_model;
+  const select = document.getElementById('model-select');
+  select.replaceChildren(...modelCatalog.map(m => {
+    const option = new Option(m.label + (m.available ? '' : ' · 설치 필요'), m.id);
+    option.disabled = !m.available;
+    return option;
+  }));
+  select.value = selectedModel;
+  select.disabled = false;
 }
+
+document.getElementById('model-select').addEventListener('change', (event) => {
+  manuallyReleased = false;
+  selectedModel = event.target.value;
+  try { localStorage.setItem('chess-model', selectedModel); } catch (_) {}
+  positionVersion++;
+  moveVersion++;
+  isThinking = false;
+  gameOver = false;
+  selectedSquare = null;
+  candidateIdx = -1;
+  candidateLocked = false;
+  whiteWinProb = null;
+  fetchAnalysis();
+  drawBoard();
+  requestAIMove();
+});
+
+document.getElementById('btn-retry').addEventListener('click', async () => {
+  manuallyReleased = false;
+  try {
+    if (!modelCatalog.length) await loadModels();
+    fetchAnalysis();
+    requestAIMove();
+  } catch (e) { apiError = e.message; updateUI(); }
+});
+
+async function startApp() {
+  window.addEventListener('resize', resizeCanvas);
+  new ResizeObserver(resizeCanvas).observe(document.getElementById('board-wrap'));
+  try { await loadModels(); } catch (e) { apiError = e.message; }
+  const startupError = apiError;
+  initGame();
+  if (startupError) { apiError = startupError; updateUI(); }
+  loadImages(() => { drawBoard(); });
+  refreshGPU();
+  setInterval(refreshGPU, 5000);
+}
+
+async function refreshGPU() {
+  if (gpuBusy) return;
+  gpuBusy = true;
+  try {
+    const res = await fetch('/api/gpu');
+    if (!res.ok) return;
+    const state = await res.json();
+    document.getElementById('gpu-status').textContent = state.loaded
+      ? `${state.model} · ${state.loading ? 'GPU 준비 중' : `미사용 시 ${Math.ceil(state.remaining_seconds / 60)}분 후 해제`}`
+      : 'GPU 해제됨 · 다음 분석 시 자동 준비';
+    document.getElementById('btn-unload').disabled = !state.loaded;
+    // Status polling itself never renews the lease. Only new visible activity.
+    if (state.loaded && !manuallyReleased && document.visibilityState === 'visible' &&
+        lastActivity > activitySent && Date.now() - activitySent >= 60000) {
+      const sentAt = Date.now();
+      const activity = await fetch('/api/gpu/activity', {method: 'POST',
+        headers: {'Content-Type': 'application/json'}, body: JSON.stringify({model: selectedModel})});
+      if (activity.ok) activitySent = sentAt;
+    }
+  } catch (_) {
+    document.getElementById('gpu-status').textContent = 'GPU 상태 연결 대기 중';
+  } finally { gpuBusy = false; }
+}
+
+for (const event of ['pointerdown', 'keydown', 'touchstart']) {
+  document.addEventListener(event, () => { lastActivity = Date.now(); }, {passive: true});
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') { lastActivity = Date.now(); refreshGPU(); }
+});
+document.getElementById('btn-unload').addEventListener('click', async () => {
+  manuallyReleased = true;
+  positionVersion++;
+  analysisVersion++;
+  moveVersion++;
+  isThinking = false;
+  analysisPending = false;
+  try {
+    const res = await fetch('/api/gpu/unload', {method: 'POST'});
+    if (!res.ok) throw new Error('GPU 해제에 실패했습니다. 다시 시도해 주세요.');
+    apiError = '';
+    allMoveProbs = [];
+    moveProbs = [];
+    updateUI();
+    renderCandidates();
+    refreshGPU();
+  } catch (e) { apiError = e.message; updateUI(); }
+});
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', startApp);

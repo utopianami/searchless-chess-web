@@ -4,3 +4,6 @@ __pycache__/
 checkpoints/9M/
 searchless_chess/checkpoints/9M/
 .omc/
+searchless_chess/checkpoints/*/
+.pytest_cache/
+test-results/

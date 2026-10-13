@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>Chess AI</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v=20260908-layout">
 </head>
 <body>
 
@@ -19,6 +19,17 @@
       <button class="color-btn active" data-color="w">백</button>
       <button class="color-btn" data-color="b">흑</button>
     </div>
+  </div>
+
+  <div id="model-bar">
+    <label for="model-select">AI 모델</label>
+    <select id="model-select" disabled><option>모델 목록 불러오는 중...</option></select>
+    <button id="btn-retry" type="button" hidden>재시도</button>
+  </div>
+  <div id="model-status" role="status" aria-live="polite"></div>
+  <div id="gpu-bar">
+    <span id="gpu-status" role="status">GPU 상태 확인 중...</span>
+    <button id="btn-unload" type="button" disabled>지금 GPU 해제</button>
   </div>
 
   <!-- Captured + Eval Bar -->
@@ -67,6 +78,6 @@
   </div>
 </div>
 
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=20260908-layout"></script>
 </body>
 </html>
